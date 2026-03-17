@@ -8,10 +8,11 @@ A CLI tool that takes a single dashcam image and returns structured driving scen
 
 ## Model
 
-- **Primary:** `Qwen/Qwen2.5-VL-7B-Instruct` via Unsloth, 4-bit NF4
+- **Primary:** `Qwen/Qwen2.5-VL-7B-Instruct` via `transformers` + `bitsandbytes`, 4-bit NF4
 - **Fallback:** `Qwen/Qwen2.5-VL-3B-Instruct` (drop-in swap via `MODEL_ID` in `config.py`)
 - `min_pixels = 256 * 28 * 28`, `max_pixels = 1280 * 28 * 28` — never change without OOM testing
 - Vision encoder is **always frozen** — do not unfreeze it
+- **No Unsloth** — incompatible with `triton-windows 3.x` on this machine. Use `transformers` + `bitsandbytes` + `peft` for inference and training.
 
 ---
 
@@ -116,7 +117,7 @@ python cli.py --image test.jpg --json | python -m json.tool
 
 ```
 rank=16, lora_alpha=32
-target_modules: Unsloth defaults — do not override
+target_modules: ["q_proj", "v_proj", "k_proj", "o_proj"]  # standard attention layers
 batch=1, grad_accum=16  →  effective batch = 16
 max_seq=2048
 lr=2e-4, scheduler=cosine, warmup_steps=50
