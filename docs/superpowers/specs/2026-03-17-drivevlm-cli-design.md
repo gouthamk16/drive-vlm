@@ -34,14 +34,15 @@ drivevlm/
 ├── CLAUDE.md
 ├── .gitignore
 ├── requirements.txt
-├── config.py        # model id, pixel caps, paths — no logic
-├── model.py         # model load + inference only
-├── prompt.py        # system prompt + message builder
-├── output.py        # JSON schema + rich terminal renderer
-├── cli.py           # argparse entry point
+├── test.jpg             # sample dashcam image committed to repo for validation runs
+├── config.py            # model id, pixel caps, paths — no logic
+├── model.py             # model load + inference only
+├── prompt.py            # system prompt + message builder
+├── output.py            # JSON schema + rich terminal renderer
+├── cli.py               # argparse entry point
 ├── train/
-│   ├── dataset.py   # DriveLM loader + chat formatter
-│   └── finetune.py  # QLoRA training loop
+│   ├── dataset.py       # DriveLM loader + chat formatter
+│   └── finetune.py      # QLoRA training loop
 └── docs/
     └── superpowers/specs/
 ```
@@ -50,8 +51,8 @@ drivevlm/
 
 | File | Single responsibility |
 |---|---|
-| `config.py` | All constants and paths — nothing else imported here |
-| `model.py` | Load model from config, run inference, return raw string |
+| `config.py` | All constants and paths — nothing else imported here; exposes `MODEL_ID` string for model selection |
+| `model.py` | Load Qwen2.5-VL via Unsloth from config, run inference, return raw string — Qwen2.5-VL loading path only; InternVL2.5 fallback would require a separate loader |
 | `prompt.py` | Build the DriveLM-schema system prompt and format image+query into chat messages |
 | `output.py` | Parse raw model output into structured dict; render to terminal or JSON string |
 | `cli.py` | Parse args, wire the above four together, print result |
@@ -74,13 +75,14 @@ cli.py
 ## 4. Model
 
 **Primary:** `Qwen2.5-VL-7B-Instruct` loaded via Unsloth in 4-bit NF4
-**Fallback chain:** Qwen2.5-VL-3B → InternVL2.5-4B (same CLI interface, swap via config)
+**Fallback chain:** Qwen2.5-VL-3B → InternVL2.5-4B
 
-**Key constraints:**
+To switch models, change `MODEL_ID` in `config.py`. The Qwen2.5-VL-3B fallback is a direct drop-in (same loader). InternVL2.5-4B would require a new loader function in `model.py`.
+
+**Key inference constraints:**
 - `min_pixels = 256 * 28 * 28`
 - `max_pixels = 1280 * 28 * 28` (caps visual tokens to ~1280 to avoid OOM)
 - `load_in_4bit = True`
-- `use_gradient_checkpointing = "unsloth"`
 - Vision encoder frozen during QLoRA fine-tuning
 
 **Why Qwen2.5-VL-7B:** Best-in-class benchmarks at this size (MMMU 58.6, DocVQA 95.7), used in OmniDrive-R1 which achieves 80.35% on DriveLM, native structured coordinate output, Apache 2.0 license, best Unsloth QLoRA support of any candidate.
@@ -109,14 +111,14 @@ The DriveLM reasoning schema, mirrored exactly in both the system prompt and the
 **CLI behavior:**
 - Default: rich terminal output (colored sections, human-readable)
 - `--json` flag: raw JSON to stdout (machine-readable, pipeable)
-- `--compare` flag (Phase 2+): side-by-side prompt-only vs fine-tuned output
+- `--compare` flag (Phase 4): runs both `--mode prompt` and `--mode ft` on the same image and prints output side-by-side; requires `--adapter`
 
 ---
 
 ## 6. CLI Interface
 
 ```
-python cli.py --image <path> [--json] [--mode prompt|ft] [--adapter <path>]
+python cli.py --image <path> [--json] [--mode prompt|ft] [--adapter <path>] [--compare]
 ```
 
 | Flag | Default | Description |
@@ -124,7 +126,8 @@ python cli.py --image <path> [--json] [--mode prompt|ft] [--adapter <path>]
 | `--image` | required | Path to dashcam image |
 | `--json` | false | Output raw JSON instead of pretty-print |
 | `--mode` | `prompt` | `prompt` = base model + system prompt; `ft` = base + LoRA adapter |
-| `--adapter` | None | Path to LoRA adapter dir (required when `--mode ft`) |
+| `--adapter` | None | Path to LoRA adapter dir (required when `--mode ft` or `--compare`) |
+| `--compare` | false | Run both prompt and ft modes; print side-by-side; requires `--adapter` |
 
 ---
 
@@ -136,21 +139,32 @@ python cli.py --image <path> [--json] [--mode prompt|ft] [--adapter <path>]
 - Deliverable: working CLI, both output modes, milestone tag `v0.3-cli`
 
 ### Phase 2 — Data Pipeline (`v0.4`)
-- DriveLM dataset from HuggingFace
+- DriveLM dataset from HuggingFace (~300K QA pairs across 696 nuScenes scenes)
 - Formatted into Qwen2.5-VL chat format
 - Train/val split
+- Before writing `finetune.py`, sample 20 formatted examples and measure token lengths to confirm `max_seq` setting
 - Deliverable: `dataset.py` that can stream batches, milestone tag `v0.4-data`
 
 ### Phase 3 — QLoRA Fine-tuning (`v0.5`)
-- Unsloth QLoRA: rank=16, frozen ViT, batch=1, grad_accum=16, max_seq=512
-- Checkpoint save
-- Smoke test: 10 steps, no OOM
-- Full training run
+
+**QLoRA settings:**
+- `rank = 16`, `lora_alpha = 32`
+- `target_modules`: Unsloth defaults — do not override (covers all attention projection layers)
+- `load_in_4bit = True`, vision encoder frozen
+- `use_gradient_checkpointing = "unsloth"`
+- `batch = 1`, `grad_accum = 16` → effective batch size = 16
+- `max_seq = 2048` (covers 95th percentile of DriveLM chat-formatted samples; 512 is too short for schema + system prompt + image tokens)
+- `lr = 2e-4`, `scheduler = cosine`, `warmup_steps = 50`
+- DriveLM has ~300K QA pairs; one epoch ≈ 18,750 optimizer steps at effective batch 16
+
+**Steps:**
+- Smoke test: 10 steps, confirm no OOM
+- Full training run, checkpoint save every epoch
 - Deliverable: saved LoRA adapter, milestone tag `v0.5-qlora`
 
 ### Phase 4 — Fine-tuned Inference (`v0.6`)
 - Load adapter via `--mode ft --adapter`
-- Side-by-side `--compare` mode
+- `--compare` mode: side-by-side prompt-only vs fine-tuned on same image
 - Final code review pass
 - Deliverable: `v0.6-finetuned`
 
@@ -167,7 +181,7 @@ python cli.py --image <path> [--json] [--mode prompt|ft] [--adapter <path>]
 
 ## 9. Testing Protocol
 
-No automated test suite. Every feature is validated by running the CLI against a real image before committing:
+No automated test suite. Every feature is validated by running the CLI against a real image before committing. `test.jpg` is a sample dashcam image committed to the repo root and used exclusively for validation runs.
 
 ```bash
 python cli.py --image test.jpg
@@ -195,7 +209,7 @@ The project CLAUDE.md will encode:
 ## 11. Custom Skills
 
 ### `drivevlm-test`
-Runs `python cli.py --image [test_img] --json` and pipes through `python -m json.tool`. Prints pass/fail + structured output. Used after every feature commit.
+Runs `python cli.py --image test.jpg --json` and pipes through `python -m json.tool`. Prints pass/fail + structured output. Used after every feature commit.
 
 ### `drivevlm-review`
 At each milestone tag, dispatches a code-reviewer agent with the diff since the last tag. Checks against CLAUDE.md standards. Returns structured verdict before proceeding to next milestone.
