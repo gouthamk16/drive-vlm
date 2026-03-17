@@ -6,3 +6,4 @@ checkpoints/
 *.safetensors
 wandb/
 .DS_Store
+.venv/
