@@ -8,7 +8,6 @@ console = Console()
 
 
 def parse(raw: str) -> dict:
-    # strip markdown code fences if model wraps output
     cleaned = re.sub(r"^```(?:json)?\n?", "", raw.strip())
     cleaned = re.sub(r"\n?```$", "", cleaned)
     return json.loads(cleaned)
@@ -38,16 +37,12 @@ def render_rich(data: dict):
         console.print(f"[bold]Causal factors:[/bold] {', '.join(factors)}")
 
 
-def render_json(data: dict) -> str:
-    return json.dumps(data, indent=2)
-
-
 def render_compare(base_data: dict, ft_data: dict):
     from rich.columns import Columns
     from rich.panel import Panel
 
     console.rule("[bold]Prompt-only vs Fine-tuned comparison")
     console.print(Columns([
-        Panel(render_json(base_data), title="[cyan]Prompt-only", border_style="cyan"),
-        Panel(render_json(ft_data), title="[green]Fine-tuned", border_style="green"),
+        Panel(json.dumps(base_data, indent=2), title="[cyan]Prompt-only", border_style="cyan"),
+        Panel(json.dumps(ft_data, indent=2), title="[green]Fine-tuned", border_style="green"),
     ]))

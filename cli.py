@@ -1,7 +1,8 @@
 import argparse
+import json
 import sys
 from prompt import build_messages
-from output import parse, render_rich, render_json
+from output import parse, render_rich, render_compare
 
 
 def main():
@@ -30,13 +31,10 @@ def main():
         raw_base = infer(msgs)
         raw_ft = infer_ft(msgs, args.adapter)
         try:
-            base_data = parse(raw_base)
-            ft_data = parse(raw_ft)
+            render_compare(parse(raw_base), parse(raw_ft))
         except Exception as e:
             print(f"error parsing output: {e}", file=sys.stderr)
             sys.exit(1)
-        from output import render_compare
-        render_compare(base_data, ft_data)
         return
 
     if args.mode == "ft":
@@ -54,7 +52,7 @@ def main():
         sys.exit(1)
 
     if args.json:
-        print(render_json(data))
+        print(json.dumps(data, indent=2))
     else:
         render_rich(data)
 
