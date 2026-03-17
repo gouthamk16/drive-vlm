@@ -87,6 +87,8 @@ To switch models, change `MODEL_ID` in `config.py`. The Qwen2.5-VL-3B fallback i
 
 **Why Qwen2.5-VL-7B:** Best-in-class benchmarks at this size (MMMU 58.6, DocVQA 95.7), used in OmniDrive-R1 which achieves 80.35% on DriveLM, native structured coordinate output, Apache 2.0 license, best Unsloth QLoRA support of any candidate.
 
+**Prior art:** NVIDIA Alpamayo-R1 (NeurIPS 2025) is the closest prior work — a 10B VLA model coupling chain-of-thought causal reasoning with trajectory planning via flow-matching diffusion. Key differences: they use proprietary 80k-hour CoC data + RL; we use open DriveLM + SFT only. Their `causal_factors` concept directly informs our output schema.
+
 ---
 
 ## 5. Output Schema
@@ -103,10 +105,13 @@ The DriveLM reasoning schema, mirrored exactly in both the system prompt and the
   ],
   "planning": {
     "action": "string",
-    "reason": "string"
+    "reason": "string",
+    "causal_factors": ["string"]
   }
 }
 ```
+
+`causal_factors` lists the specific perceived/predicted elements that directly drove the planning decision (e.g. `["cyclist merging left", "wet road"]`). Inspired by Alpamayo-R1's Chain of Causation — makes the reasoning trace verifiable and enables consistency scoring in Phase 4.
 
 **CLI behavior:**
 - Default: rich terminal output (colored sections, human-readable)
@@ -165,6 +170,7 @@ python cli.py --image <path> [--json] [--mode prompt|ft] [--adapter <path>] [--c
 ### Phase 4 — Fine-tuned Inference (`v0.6`)
 - Load adapter via `--mode ft --adapter`
 - `--compare` mode: side-by-side prompt-only vs fine-tuned on same image
+- Reasoning-action consistency scoring: verify that `planning.causal_factors` references entities present in `perception` and `prediction` (Alpamayo-R1 eval principle)
 - Final code review pass
 - Deliverable: `v0.6-finetuned`
 
