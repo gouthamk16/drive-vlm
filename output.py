@@ -1,48 +1,42 @@
 import json
 import re
-from rich.console import Console
-from rich.table import Table
-from rich import box
-
-console = Console()
 
 
 def parse(raw: str) -> dict:
-    cleaned = re.sub(r"^```(?:json)?\n?", "", raw.strip())
-    cleaned = re.sub(r"\n?```$", "", cleaned)
-    return json.loads(cleaned)
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+    raw = re.sub(r"^```(?:json)?\n?", "", raw)
+    raw = re.sub(r"\n?```$", "", raw)
+    return json.loads(raw)
 
 
-def render_rich(data: dict):
-    console.rule("[bold cyan]Perception")
-    t = Table(box=box.SIMPLE, show_header=True, header_style="bold")
-    t.add_column("Object"), t.add_column("Location"), t.add_column("State")
+def render(data: dict):
+    scene = data.get("scene", {})
+    if scene:
+        print(f"\nScene: {scene.get('weather')} | {scene.get('time')} | {scene.get('road')} | ego in {scene.get('ego_lane')} lane")
+
+    print("\nPerception:")
     for p in data.get("perception", []):
-        t.add_row(p["object"], p["location"], p["state"])
-    console.print(t)
+        risk = p.get("risk", "")
+        print(f"  [{risk}] {p['object']} | {p['location']} | {p['state']}")
 
-    console.rule("[bold yellow]Prediction")
-    t = Table(box=box.SIMPLE, show_header=True, header_style="bold")
-    t.add_column("Subject"), t.add_column("Action"), t.add_column("Confidence")
+    print("\nPrediction:")
     for p in data.get("prediction", []):
-        t.add_row(p["subject"], p["action"], p["confidence"])
-    console.print(t)
+        print(f"  {p.get('subject','')} -> {p.get('action','')} ({p.get('confidence','')})")
+        influence = p.get("influence", "")
+        if influence:
+            print(f"      {influence}")
 
-    console.rule("[bold green]Planning")
     plan = data.get("planning", {})
-    console.print(f"[bold]Action:[/bold] {plan.get('action', '')}")
-    console.print(f"[bold]Reason:[/bold] {plan.get('reason', '')}")
+    print("\nPlanning:")
+    print(f"  {plan.get('meta_action', '').upper()} | {plan.get('reason', '')}")
     factors = plan.get("causal_factors", [])
     if factors:
-        console.print(f"[bold]Causal factors:[/bold] {', '.join(factors)}")
+        print(f"  caused by: {', '.join(factors)}")
+    print()
 
 
-def render_compare(base_data: dict, ft_data: dict):
-    from rich.columns import Columns
-    from rich.panel import Panel
-
-    console.rule("[bold]Prompt-only vs Fine-tuned comparison")
-    console.print(Columns([
-        Panel(json.dumps(base_data, indent=2), title="[cyan]Prompt-only", border_style="cyan"),
-        Panel(json.dumps(ft_data, indent=2), title="[green]Fine-tuned", border_style="green"),
-    ]))
+def compare(base: dict, ft: dict):
+    for section in ["scene", "perception", "prediction", "planning"]:
+        print(f"\n--- {section} ---")
+        print(f"  base: {json.dumps(base.get(section), indent=2)}")
+        print(f"    ft: {json.dumps(ft.get(section), indent=2)}")

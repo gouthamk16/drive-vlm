@@ -47,7 +47,13 @@ def _run_inference(model, processor, messages: list) -> str:
         padding=True,
         return_tensors="pt",
     ).to("cuda")
-    out = model.generate(**inputs, max_new_tokens=512)
+    out = model.generate(
+        **inputs,
+        max_new_tokens=1024,
+        temperature=0.1,
+        do_sample=True,
+        repetition_penalty=1.1,
+    )
     trimmed = out[:, inputs["input_ids"].shape[1]:]
     return processor.batch_decode(trimmed, skip_special_tokens=True)[0]
 
