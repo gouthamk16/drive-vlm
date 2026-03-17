@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.env
+checkpoints/
+*.ckpt
+*.safetensors
+wandb/
+.DS_Store
