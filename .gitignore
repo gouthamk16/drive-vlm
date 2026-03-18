@@ -7,3 +7,10 @@ checkpoints/
 wandb/
 .DS_Store
 .venv/
+CLAUDE.md
+docs/
+eval_images/
+eval_results.json
+*.jpg
+*.png
+*.jpeg

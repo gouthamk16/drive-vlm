@@ -17,7 +17,8 @@ def render(data: dict):
     print("\nPerception:")
     for p in data.get("perception", []):
         risk = p.get("risk", "")
-        print(f"  [{risk}] {p['object']} | {p['location']} | {p['state']}")
+        loc = f"{p.get('direction','?')} {p.get('distance','?')}"
+        print(f"  [{risk}] {p['object']} | {loc} | {p['state']}")
 
     print("\nPrediction:")
     for p in data.get("prediction", []):

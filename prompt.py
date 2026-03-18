@@ -20,7 +20,8 @@ Schema (output exactly this structure):
   "perception": [
     {
       "object": "<car|truck|bus|motorcycle|cyclist|pedestrian|traffic_light|stop_sign|traffic_cone|parked_vehicle|other>",
-      "location": "<front|front-left|front-right|left|right|rear-left|rear|rear-right> <near|mid|far>",
+      "direction": "<front|front-left|front-right|left|right|rear-left|rear|rear-right>",
+      "distance": "<near|mid|far>",
       "state": "<stopped|moving_straight|turning_left|turning_right|merging|crossing|parked|unknown>",
       "risk": "<high|medium|low>"
     }
@@ -41,7 +42,7 @@ Schema (output exactly this structure):
 }
 
 Rules:
-- List only objects actually visible in the image. Do not duplicate objects.
+- List at most 8 objects. Prioritise by risk (high first). Do not duplicate objects.
 - Never omit pedestrians or cyclists even if stationary.
 - Every causal_factors entry must exactly match a value in perception[].object or prediction[].subject.
 - Empty scene: perception=[], prediction=[], meta_action="maintain_speed".

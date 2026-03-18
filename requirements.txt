@@ -6,5 +6,4 @@ accelerate>=1.0.0
 peft>=0.14.0
 qwen-vl-utils
 datasets
-rich
 pillow
