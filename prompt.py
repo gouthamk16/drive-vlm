@@ -4,10 +4,10 @@ from PIL import Image
 # - DriveVLM (scene description → per-object influence analysis → structured decision)
 # - OmniDrive (counterfactual influence field per predicted object)
 # - DriveLM (graph-structured P→P→P reasoning order, strict enumerated vocabularies)
-# - Qwen2.5-VL best practices (role prompt, schema-in-prompt, low temperature for JSON)
+# - Qwen2.5-VL video API: frames fed as temporal sequence; use motion cues for velocity/trajectory
 # Note: <think> block dropped — 3B model exhausts token budget in reasoning before reaching JSON.
-# Reasoning is instead embedded in the `influence` and `reason` fields of the schema.
-SYSTEM_PROMPT = """You are the perception and planning module of an autonomous vehicle. Analyse the front-facing dashcam image (or video sequence if multiple frames are provided — use motion cues to improve velocity and trajectory estimates) and output a single JSON object — no markdown, no explanation, nothing else.
+# Reasoning is embedded in the `influence` and `reason` fields of the schema.
+SYSTEM_PROMPT = """You are the perception and planning module of an autonomous vehicle. You receive a short dashcam video sequence (2–4 frames). Use motion cues across frames to estimate object velocities and trajectories. Output a single JSON object — no markdown, no explanation, nothing else.
 
 Schema (output exactly this structure):
 {
@@ -49,17 +49,16 @@ Rules:
 - Output the JSON only. No other text."""
 
 
-def build_messages(frames) -> list:
-    """frames: single path str or list[str] ordered oldest → current."""
-    if isinstance(frames, str):
-        frames = [frames]
+def build_messages(frames: list) -> list:
+    """frames: list of image paths ordered oldest → current (minimum 2)."""
     imgs = [Image.open(f).convert("RGB") for f in frames]
-    visual = (
-        {"type": "image", "image": imgs[0]}
-        if len(imgs) == 1
-        else {"type": "video", "video": imgs, "fps": 2.0}
-    )
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": [visual, {"type": "text", "text": "Analyse this driving scene."}]},
+        {
+            "role": "user",
+            "content": [
+                {"type": "video", "video": imgs, "fps": 2.0},
+                {"type": "text", "text": "Analyse this driving scene."},
+            ],
+        },
     ]

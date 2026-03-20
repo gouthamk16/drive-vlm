@@ -1,12 +1,11 @@
 import sys
-import json
 from prompt import build_messages
 from model import infer
 from output import parse, render
 
 frames = sys.argv[1:]
-if not frames:
-    print("usage: python main.py <frame1> [frame2 frame3 ...]  (oldest first)")
+if len(frames) < 2:
+    print("usage: python main.py <frame_t-2> <frame_t-1> <frame_t>  (oldest first, min 2 frames)")
     sys.exit(1)
 
 msgs = build_messages(frames)

@@ -2,8 +2,10 @@ from datasets import load_dataset
 from PIL import Image, ImageDraw
 import io, random
 
-DRIVELM_REPO = "OpenDriveLab/DriveLM"
+DRIVELM_REPO   = "OpenDriveLab/DriveLM"
 DRIVELM_CONFIG = "DriveLM_nuScenes"
+N_FRAMES       = 3    # frames per training sample: [T-2, T-1, T]
+FPS            = 2.0  # nuScenes keyframe rate
 
 
 def _load_img(raw) -> Image.Image:
@@ -14,15 +16,18 @@ def _load_img(raw) -> Image.Image:
     return Image.fromarray(raw).convert("RGB")
 
 
-def _to_messages(sample, prev_imgs=None) -> dict:
-    """Convert a raw DriveLM sample to {messages: [...]} chat format.
-    prev_imgs: list of PIL Images (T-n ... T-1), if available triggers video block."""
+def _to_messages(sample, prev_imgs: list) -> dict:
+    """Build a {messages: [...]} dict with a video content block.
+    prev_imgs: list of PIL Images [T-2, T-1, ...]. If empty, current frame
+    is duplicated to fill N_FRAMES — standard temporal padding for first frames."""
     img = _load_img(sample["image"])
+    frames = prev_imgs + [img]
 
-    if prev_imgs:
-        visual = {"type": "video", "video": prev_imgs + [img], "fps": 2.0}
-    else:
-        visual = {"type": "image", "image": img}
+    # Pad to N_FRAMES by repeating the oldest frame at the front
+    while len(frames) < N_FRAMES:
+        frames = [frames[0]] + frames
+
+    visual = {"type": "video", "video": frames, "fps": FPS}
 
     messages = []
     for i, turn in enumerate(sample.get("conversations", [])):
@@ -38,49 +43,50 @@ def _to_messages(sample, prev_imgs=None) -> dict:
 
 
 def _build_temporal_index(hf_ds) -> dict:
-    """Build {idx -> [prev_idx, ...]} from scene metadata if available.
-    DriveLM samples share a scene_token; frames within a scene are ordered
-    by their position in the dataset. Returns empty dict if no usable field."""
+    """Build {idx -> [prev_idx, ...]} using scene metadata.
+
+    DriveLM samples share a scene_token field; frames within a scene appear
+    in chronological order. If no usable field exists, returns {} and the
+    dataset falls back to duplicate-padding every sample."""
     cols = getattr(hf_ds, "column_names", [])
     scene_field = next((f for f in ["scene_token", "id"] if f in cols), None)
     if scene_field is None:
         return {}
 
-    # Batch column access is fast via Arrow
-    vals = hf_ds[scene_field]
+    vals = hf_ds[scene_field]   # fast Arrow column access
     groups = {}
     for i, val in enumerate(vals):
-        # For 'id' fields like "scene123_frame456", take the scene prefix
+        # For 'id' fields like "scene123_frame456", the scene prefix is before '_'
         key = str(val).split("_")[0] if scene_field == "id" else str(val)
         groups.setdefault(key, []).append(i)
 
     prev_map = {}
     for indices in groups.values():
         for j, idx in enumerate(indices):
-            if j > 0:
-                # Up to 2 previous frames, in chronological order
-                prev_map[idx] = indices[max(0, j - 2) : j]
+            # Store up to (N_FRAMES - 1) previous indices in chronological order
+            prev_map[idx] = indices[max(0, j - (N_FRAMES - 1)) : j]
     return prev_map
 
 
 class LazyDataset:
-    """Wraps a raw HuggingFace dataset and converts samples on-the-fly.
-    Avoids Arrow serialisation errors from mixed-type message content.
-    Uses temporal context (prev frames) when scene metadata is available."""
+    """Wraps a HuggingFace dataset; converts samples on-the-fly to video sequences.
+    Always produces N_FRAMES-frame video blocks — no single-frame path."""
 
     def __init__(self, hf_dataset):
         self._ds = hf_dataset
         self._prev_map = _build_temporal_index(hf_dataset)
         if self._prev_map:
-            print(f"Temporal index built: {len(self._prev_map)}/{len(hf_dataset)} samples have prev frames")
+            n = sum(1 for v in self._prev_map.values() if v)
+            print(f"Temporal index: {n}/{len(hf_dataset)} samples have real prev frames "
+                  f"({len(hf_dataset) - n} will be padded)")
+        else:
+            print("No scene metadata found — all samples will be duplicate-padded")
 
     def __len__(self):
         return len(self._ds)
 
     def __getitem__(self, idx):
-        prev_imgs = None
-        if idx in self._prev_map:
-            prev_imgs = [_load_img(self._ds[p]["image"]) for p in self._prev_map[idx]]
+        prev_imgs = [_load_img(self._ds[p]["image"]) for p in self._prev_map.get(idx, [])]
         return _to_messages(self._ds[idx], prev_imgs)
 
 
@@ -89,7 +95,7 @@ def load_drivelm(split: str = "train") -> LazyDataset:
     return LazyDataset(ds)
 
 
-def train_val_split(ds: LazyDataset, val_ratio: float = 0.05):
+def train_val_split(ds, val_ratio: float = 0.05):
     n = len(ds)
     val_n = max(1, int(n * val_ratio))
     indices = list(range(n))
@@ -105,8 +111,8 @@ def train_val_split(ds: LazyDataset, val_ratio: float = 0.05):
     return _Subset(ds, train_idx), _Subset(ds, val_idx)
 
 
-def synthetic_dataset(n: int = 32) -> "LazyDataset":
-    """Synthetic data for pipeline validation without HF auth."""
+def synthetic_dataset(n: int = 32):
+    """Synthetic N_FRAMES-frame video sequences for pipeline validation."""
     qa_pairs = [
         ("What should the ego vehicle do?",
          '{"scene":{"weather":"clear","time":"day","road":"intersection","ego_lane":"center"},'
@@ -121,21 +127,23 @@ def synthetic_dataset(n: int = 32) -> "LazyDataset":
     ]
 
     class _SyntheticDataset:
-        def __init__(self, n):
-            self._n = n
-            self._pairs = qa_pairs
+        def __init__(self, n): self._n = n
 
-        def __len__(self):
-            return self._n
+        def __len__(self): return self._n
 
         def __getitem__(self, idx):
             random.seed(idx)
-            img = Image.new("RGB", (224, 224), color=(random.randint(80, 180),) * 3)
-            ImageDraw.Draw(img).rectangle([50, 80, 174, 144], fill=(50, 50, 50))
-            q, a = self._pairs[idx % len(self._pairs)]
+            # Slight brightness shift per frame simulates motion
+            frames = []
+            for t in range(N_FRAMES):
+                base = random.randint(80, 180)
+                img = Image.new("RGB", (224, 224), color=(base + t * 5,) * 3)
+                ImageDraw.Draw(img).rectangle([50 + t * 3, 80, 174 + t * 3, 144], fill=(50, 50, 50))
+                frames.append(img)
+            q, a = qa_pairs[idx % len(qa_pairs)]
             return {"messages": [
                 {"role": "user", "content": [
-                    {"type": "image", "image": img},
+                    {"type": "video", "video": frames, "fps": FPS},
                     {"type": "text", "text": q},
                 ]},
                 {"role": "assistant", "content": a},
