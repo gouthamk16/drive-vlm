@@ -3,7 +3,7 @@ from PIL import Image, ImageDraw
 import io, random
 
 DRIVELM_REPO   = "OpenDriveLab/DriveLM"
-DRIVELM_CONFIG = "DriveLM_nuScenes"
+DRIVELM_CONFIG = "default"
 N_FRAMES       = 3    # frames per training sample: [T-2, T-1, T]
 FPS            = 2.0  # nuScenes keyframe rate
 
