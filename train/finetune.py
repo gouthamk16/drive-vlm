@@ -77,17 +77,19 @@ class VLMCollator:
     def __call__(self, samples):
         all_ids, all_masks, all_labels = [], [], []
         all_pixels, all_grids = [], []
+        all_vid_pixels, all_vid_grids = [], []
 
         for s in samples:
             msgs = s["messages"]
             text = self.processor.apply_chat_template(
                 msgs, tokenize=False, add_generation_prompt=False
             )
-            img_inputs, _ = process_vision_info(msgs)
+            img_inputs, vid_inputs = process_vision_info(msgs)
 
             enc = self.processor(
                 text=[text],
                 images=img_inputs or None,
+                videos=vid_inputs or None,
                 return_tensors="pt",
                 padding=False,
             )
@@ -103,6 +105,10 @@ class VLMCollator:
                 all_pixels.append(enc["pixel_values"])
             if "image_grid_thw" in enc:
                 all_grids.append(enc["image_grid_thw"])
+            if "pixel_values_videos" in enc:
+                all_vid_pixels.append(enc["pixel_values_videos"])
+            if "video_grid_thw" in enc:
+                all_vid_grids.append(enc["video_grid_thw"])
 
         batch = {
             "input_ids":      pad_sequence(all_ids,    batch_first=True, padding_value=self._pad_id),
@@ -110,9 +116,13 @@ class VLMCollator:
             "labels":         pad_sequence(all_labels, batch_first=True, padding_value=-100),
         }
         if all_pixels:
-            batch["pixel_values"]    = torch.cat(all_pixels, dim=0)
+            batch["pixel_values"]        = torch.cat(all_pixels,     dim=0)
         if all_grids:
-            batch["image_grid_thw"]  = torch.cat(all_grids,  dim=0)
+            batch["image_grid_thw"]      = torch.cat(all_grids,      dim=0)
+        if all_vid_pixels:
+            batch["pixel_values_videos"] = torch.cat(all_vid_pixels, dim=0)
+        if all_vid_grids:
+            batch["video_grid_thw"]      = torch.cat(all_vid_grids,  dim=0)
         return batch
 
 

@@ -7,7 +7,7 @@ from PIL import Image
 # - Qwen2.5-VL best practices (role prompt, schema-in-prompt, low temperature for JSON)
 # Note: <think> block dropped — 3B model exhausts token budget in reasoning before reaching JSON.
 # Reasoning is instead embedded in the `influence` and `reason` fields of the schema.
-SYSTEM_PROMPT = """You are the perception and planning module of an autonomous vehicle. Analyse the front-facing dashcam image and output a single JSON object — no markdown, no explanation, nothing else.
+SYSTEM_PROMPT = """You are the perception and planning module of an autonomous vehicle. Analyse the front-facing dashcam image (or video sequence if multiple frames are provided — use motion cues to improve velocity and trajectory estimates) and output a single JSON object — no markdown, no explanation, nothing else.
 
 Schema (output exactly this structure):
 {
@@ -49,15 +49,17 @@ Rules:
 - Output the JSON only. No other text."""
 
 
-def build_messages(image_path: str) -> list:
-    img = Image.open(image_path).convert("RGB")
+def build_messages(frames) -> list:
+    """frames: single path str or list[str] ordered oldest → current."""
+    if isinstance(frames, str):
+        frames = [frames]
+    imgs = [Image.open(f).convert("RGB") for f in frames]
+    visual = (
+        {"type": "image", "image": imgs[0]}
+        if len(imgs) == 1
+        else {"type": "video", "video": imgs, "fps": 2.0}
+    )
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {
-            "role": "user",
-            "content": [
-                {"type": "image", "image": img},
-                {"type": "text", "text": "Analyse this driving scene."},
-            ],
-        },
+        {"role": "user", "content": [visual, {"type": "text", "text": "Analyse this driving scene."}]},
     ]

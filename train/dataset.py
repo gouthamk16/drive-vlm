@@ -6,15 +6,23 @@ DRIVELM_REPO = "OpenDriveLab/DriveLM"
 DRIVELM_CONFIG = "DriveLM_nuScenes"
 
 
-def _to_messages(sample) -> dict:
+def _load_img(raw) -> Image.Image:
+    if isinstance(raw, bytes):
+        return Image.open(io.BytesIO(raw)).convert("RGB")
+    if isinstance(raw, Image.Image):
+        return raw.convert("RGB")
+    return Image.fromarray(raw).convert("RGB")
+
+
+def _to_messages(sample, prev_imgs=None) -> dict:
     """Convert a raw DriveLM sample to {messages: [...]} chat format.
-    Kept separate from the dataset pipeline — called lazily at collation time
-    to avoid PyArrow serialisation issues with mixed-type content fields."""
-    img = sample["image"]
-    if isinstance(img, bytes):
-        img = Image.open(io.BytesIO(img)).convert("RGB")
-    elif not isinstance(img, Image.Image):
-        img = Image.fromarray(img).convert("RGB")
+    prev_imgs: list of PIL Images (T-n ... T-1), if available triggers video block."""
+    img = _load_img(sample["image"])
+
+    if prev_imgs:
+        visual = {"type": "video", "video": prev_imgs + [img], "fps": 2.0}
+    else:
+        visual = {"type": "image", "image": img}
 
     messages = []
     for i, turn in enumerate(sample.get("conversations", [])):
@@ -22,28 +30,58 @@ def _to_messages(sample) -> dict:
         if i == 0:
             messages.append({
                 "role": role,
-                "content": [
-                    {"type": "image", "image": img},
-                    {"type": "text", "text": turn["value"]},
-                ],
+                "content": [visual, {"type": "text", "text": turn["value"]}],
             })
         else:
             messages.append({"role": role, "content": turn["value"]})
     return {"messages": messages}
 
 
+def _build_temporal_index(hf_ds) -> dict:
+    """Build {idx -> [prev_idx, ...]} from scene metadata if available.
+    DriveLM samples share a scene_token; frames within a scene are ordered
+    by their position in the dataset. Returns empty dict if no usable field."""
+    cols = getattr(hf_ds, "column_names", [])
+    scene_field = next((f for f in ["scene_token", "id"] if f in cols), None)
+    if scene_field is None:
+        return {}
+
+    # Batch column access is fast via Arrow
+    vals = hf_ds[scene_field]
+    groups = {}
+    for i, val in enumerate(vals):
+        # For 'id' fields like "scene123_frame456", take the scene prefix
+        key = str(val).split("_")[0] if scene_field == "id" else str(val)
+        groups.setdefault(key, []).append(i)
+
+    prev_map = {}
+    for indices in groups.values():
+        for j, idx in enumerate(indices):
+            if j > 0:
+                # Up to 2 previous frames, in chronological order
+                prev_map[idx] = indices[max(0, j - 2) : j]
+    return prev_map
+
+
 class LazyDataset:
     """Wraps a raw HuggingFace dataset and converts samples on-the-fly.
-    Avoids Arrow serialisation errors from mixed-type message content."""
+    Avoids Arrow serialisation errors from mixed-type message content.
+    Uses temporal context (prev frames) when scene metadata is available."""
 
     def __init__(self, hf_dataset):
         self._ds = hf_dataset
+        self._prev_map = _build_temporal_index(hf_dataset)
+        if self._prev_map:
+            print(f"Temporal index built: {len(self._prev_map)}/{len(hf_dataset)} samples have prev frames")
 
     def __len__(self):
         return len(self._ds)
 
     def __getitem__(self, idx):
-        return _to_messages(self._ds[idx])
+        prev_imgs = None
+        if idx in self._prev_map:
+            prev_imgs = [_load_img(self._ds[p]["image"]) for p in self._prev_map[idx]]
+        return _to_messages(self._ds[idx], prev_imgs)
 
 
 def load_drivelm(split: str = "train") -> LazyDataset:
@@ -54,7 +92,6 @@ def load_drivelm(split: str = "train") -> LazyDataset:
 def train_val_split(ds: LazyDataset, val_ratio: float = 0.05):
     n = len(ds)
     val_n = max(1, int(n * val_ratio))
-    # deterministic split: last val_ratio fraction as val
     indices = list(range(n))
     random.seed(42)
     random.shuffle(indices)
@@ -68,7 +105,7 @@ def train_val_split(ds: LazyDataset, val_ratio: float = 0.05):
     return _Subset(ds, train_idx), _Subset(ds, val_idx)
 
 
-def synthetic_dataset(n: int = 32) -> LazyDataset:
+def synthetic_dataset(n: int = 32) -> "LazyDataset":
     """Synthetic data for pipeline validation without HF auth."""
     qa_pairs = [
         ("What should the ego vehicle do?",

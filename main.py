@@ -4,11 +4,12 @@ from prompt import build_messages
 from model import infer
 from output import parse, render
 
-if len(sys.argv) < 2:
-    print("usage: python main.py <image_path>")
+frames = sys.argv[1:]
+if not frames:
+    print("usage: python main.py <frame1> [frame2 frame3 ...]  (oldest first)")
     sys.exit(1)
 
-msgs = build_messages(sys.argv[1])
+msgs = build_messages(frames)
 raw = infer(msgs)
 
 try:
