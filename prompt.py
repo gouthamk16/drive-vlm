@@ -50,8 +50,11 @@ Rules:
 
 
 def build_messages(frames: list) -> list:
-    """frames: list of image paths ordered oldest → current (minimum 2)."""
-    imgs = [Image.open(f).convert("RGB") for f in frames]
+    """frames: list of file paths or PIL Images, ordered oldest → current."""
+    imgs = [
+        Image.open(f).convert("RGB") if isinstance(f, str) else f.convert("RGB")
+        for f in frames
+    ]
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
         {
